@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>高雄市中油加油站 OSM 地圖與地理資料系統</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome Icons CDN -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Leaflet CSS CDN -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- PapaParse CDN for robust CSV handling -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            cpc: {
+              blue: '#003366',
+              red: '#E30613',
+              lightBlue: '#0055A5',
+              hoverBlue: '#002244',
+              bgLight: '#F8FAFC',
+              gold: '#D4AF37'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    .leaflet-popup-content-wrapper {
+      padding: 0;
+      border-radius: 0.875rem;
+      overflow: hidden;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+      border: 1px solid rgba(226, 232, 240, 0.8);
+    }
+    .leaflet-popup-content {
+      margin: 0 !important;
+      width: 320px !important;
+    }
+    .leaflet-container {
+      font-family: inherit;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    .station-pin {
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+      filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));
+    }
+    .station-pin:hover {
+      transform: scale(1.22) translateY(-4px);
+      z-index: 1000 !important;
+    }
+    .pulse-user-location {
+      border-radius: 50%;
+      height: 20px;
+      width: 20px;
+      position: absolute;
+      background: #3B82F6;
+      box-shadow: 0 0 0 rgba(59, 130, 246, 0.4);
+      animation: pulse-ring 1.8s infinite;
+    }
+    @keyframes pulse-ring {
+      0% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 15px rgba(59, 130, 246, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+      }
+    }
+    .toast-fade {
+      transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out;
+    }
+  </style>
+</head>
+
+<body class="h-full flex flex-col font-sans bg-slate-100 text-slate-800 antialiased overflow-hidden select-none">
+
+  <!-- Notification Toast Container -->
+  <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <header class="bg-cpc-blue text-white shadow-lg z-30 shrink-0 border-b-4 border-cpc-red">
+    <div class="max-w-7xl mx-auto px-4 py-2.5 flex items-center justify-between flex-wrap gap-2">
+      
+      <!-- Brand Logo & Title -->
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-full bg-white flex items-center justify-center text-cpc-red shadow-md shrink-0 border-2 border-slate-100">
+          <i class="fa-solid fa-map-location-dot text-xl"></i>
+        </div>
+        <div>
+          <h1 class="text-base md:text-lg font-bold tracking-wide flex items-center gap-2">
+            高雄 OSM 圖資與中油加油站系統
+            <span class="text-[11px] bg-emerald-500 text-white font-semibold px-2 py-0.5 rounded-full tracking-wider shadow-sm flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span> Overpass/OSM 連動
+            </span>
+          </h1>
+          <p class="text-xs text-slate-200 hidden sm:block">開放街圖 (OpenStreetMap) 地理資料撈取 | 實時 Overpass QL | 圖磚樣式切換</p>
+        </div>
+      </div>
+      
+      <!-- Top Action Toolbar -->
+      <div class="flex items-center gap-2 flex-wrap">
+        <button id="btn-osm-info" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 border border-white/20 active:scale-95">
+          <i class="fa-solid fa-circle-info text-amber-300"></i>
+          <span class="hidden sm:inline">OSM 資料源說明</span>
+        </button>
+        <button id="btn-user-location" class="bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 shadow-sm active:scale-95">
+          <i class="fa-solid fa-crosshairs"></i>
+          <span class="hidden sm:inline">我的定位</span>
+        </button>
+        <button id="btn-overpass" class="bg-purple-700 hover:bg-purple-600 text-white text-xs px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 shadow-sm active:scale-95 border border-purple-400/30">
+          <i class="fa-solid fa-database text-purple-200"></i>
+          <span>Overpass API 撈取</span>
+        </button>
+        <button id="btn-open-csv" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 border border-white/20 active:scale-95">
+          <i class="fa-solid fa-code text-amber-300"></i>
+          <span class="hidden md:inline">編輯 CSV</span>
+        </button>
+        <label class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95">
+          <i class="fa-solid fa-file-import"></i>
+          <span class="hidden sm:inline">匯入 CSV</span>
+          <input type="file" id="csv-file-input" accept=".csv,.txt" class="hidden">
+        </label>
+        <button id="btn-export-csv" class="bg-cpc-red hover:bg-red-700 text-white text-xs px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 shadow-sm active:scale-95">
+          <i class="fa-solid fa-file-export"></i>
+          <span class="hidden sm:inline">匯出 CSV</span>
+        </button>
+        <!-- Mobile Drawer Toggle -->
+        <button id="mobile-toggle" class="md:hidden bg-cpc-lightBlue p-2 rounded-lg text-white hover:bg-opacity-90 transition">
+          <i class="fa-solid fa-bars text-base"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="flex-1 flex relative overflow-hidden">
+    
+    <!-- Left Navigation & Filters Sidebar -->
+    <aside id="sidebar" class="absolute md:relative z-20 inset-y-0 left-0 w-full md:w-96 bg-white shadow-2xl md:shadow-none flex flex-col transition-transform duration-300 transform -translate-x-full md:translate-x-0 border-r border-slate-200">
+      
+      <!-- Search & Filters Container -->
+      <div class="p-3.5 border-b border-slate-200 bg-slate-50/90 backdrop-blur space-y-2.5 shrink-0">
+        
+        <!-- Mobile Drawer Header -->
+        <div class="flex justify-between items-center md:hidden mb-1">
+          <span class="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+            <i class="fa-solid fa-filter text-cpc-lightBlue"></i> 搜尋與過濾選單
+          </span>
+          <button id="mobile-close" class="text-slate-400 hover:text-slate-600 p-1">
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+
+        <!-- Keyword Search Input -->
+        <div class="relative">
+          <input id="search-input" type="text" placeholder="搜尋站名、地址、電話或路名..." 
+            class="w-full pl-9 pr-8 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-cpc-lightBlue transition shadow-sm">
+          <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+          <button id="clear-search" class="hidden absolute right-2.5 top-2 text-slate-400 hover:text-slate-600">
+            <i class="fa-solid fa-circle-xmark text-xs"></i>
+          </button>
+        </div>
+
+        <!-- Filter Select Dropdowns -->
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <label class="block font-medium text-slate-600 mb-0.5">高雄行政區</label>
+            <select id="filter-district" class="w-full p-1.5 bg-white border border-slate-300 rounded-md text-slate-700 focus:ring-1 focus:ring-cpc-lightBlue focus:outline-none">
+              <option value="all">全部行政區</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block font-medium text-slate-600 mb-0.5">經營型態</label>
+            <select id="filter-type" class="w-full p-1.5 bg-white border border-slate-300 rounded-md text-slate-700 focus:ring-1 focus:ring-cpc-lightBlue focus:outline-none">
+              <option value="all">全部型態</option>
+              <option value="直營">僅直營站 (CPC)</option>
+              <option value="加盟">僅加盟站</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Checkbox Filter Toggles -->
+        <div class="grid grid-cols-2 gap-2 pt-1 text-xs text-slate-700 font-medium">
+          <label class="flex items-center cursor-pointer select-none bg-white p-1.5 rounded border border-slate-200 hover:bg-slate-50">
+            <input type="checkbox" id="filter-selfservice" class="rounded text-cpc-blue focus:ring-cpc-lightBlue h-3.5 w-3.5">
+            <span class="ml-1.5 text-[11px]">自助加油</span>
+          </label>
+          <label class="flex items-center cursor-pointer select-none bg-white p-1.5 rounded border border-slate-200 hover:bg-slate-50">
+            <input type="checkbox" id="filter-highway" class="rounded text-cpc-blue focus:ring-cpc-lightBlue h-3.5 w-3.5">
+            <span class="ml-1.5 text-[11px]">國道/快速路</span>
+          </label>
+          <label class="flex items-center cursor-pointer select-none bg-white p-1.5 rounded border border-slate-200 hover:bg-slate-50">
+            <input type="checkbox" id="filter-24h" class="rounded text-cpc-blue focus:ring-cpc-lightBlue h-3.5 w-3.5">
+            <span class="ml-1.5 text-[11px]">24 小時營業</span>
+          </label>
+          <label class="flex items-center cursor-pointer select-none bg-white p-1.5 rounded border border-slate-200 hover:bg-slate-50">
+            <input type="checkbox" id="filter-gogoro" class="rounded text-cpc-blue focus:ring-cpc-lightBlue h-3.5 w-3.5">
+            <span class="ml-1.5 text-[11px]">Gogoro 換電</span>
+          </label>
+        </div>
+
+        <!-- Result Summary & Reset -->
+        <div class="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-200">
+          <span class="flex items-center gap-1 font-medium">
+            符合條件: <strong id="result-count" class="text-cpc-blue font-bold text-sm">0</strong> 筆
+          </span>
+          <button id="reset-filters" class="text-cpc-lightBlue hover:underline flex items-center gap-1 text-[11px] font-medium">
+            <i class="fa-solid fa-rotate-left"></i> 重置條件
+          </button>
+        </div>
+      </div>
+
+      <!-- Station List Cards Container -->
+      <div id="station-list" class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2.5 bg-slate-100">
+        <!-- Rendered via JS -->
+      </div>
+
+      <!-- Sidebar Footer Stats -->
+      <div id="stats-bar" class="p-2.5 bg-white border-t border-slate-200 text-[11px] text-slate-600 flex justify-between items-center shrink-0">
+        <span class="flex items-center gap-1"><i class="fa-solid fa-chart-simple text-cpc-lightBlue"></i> 直營/加盟: <span id="stat-ratio" class="font-bold text-slate-800">0/0</span></span>
+        <span class="text-slate-400">|</span>
+        <span class="flex items-center gap-1"><i class="fa-solid fa-bolt text-amber-500"></i> 自助站: <span id="stat-self" class="font-bold text-slate-800">0</span></span>
+      </div>
+    </aside>
+
+    <div class="flex-1 h-full w-full relative">
+      <!-- OSM Map Container -->
+      <div id="map" class="h-full w-full bg-slate-200 z-10"></div>
+
+      <!-- Floating Tile Badge -->
+      <div class="absolute top-3 right-3 z-20 bg-white/95 backdrop-blur rounded-xl shadow-lg border border-slate-200/80 px-3 py-2 text-xs">
+        <div class="font-bold text-slate-700 text-[11px] flex items-center gap-1.5">
+          <i class="fa-solid fa-mountain text-emerald-600"></i> OpenTopoMap 等高線地形圖
+        </div>
+      </div>
+
+      <!-- Map Legend Overlay -->
+      <div class="absolute bottom-4 left-4 z-20 hidden sm:flex items-center gap-3 bg-white/90 backdrop-blur px-3 py-1.5 rounded-lg shadow-md border border-slate-200 text-[11px] text-slate-700">
+        <span class="flex items-center gap-1.5">
+          <span class="w-3 h-3 rounded-full bg-[#003366] border border-white inline-block"></span> 直營站 (CPC)
+        </span>
+        <span class="flex items-center gap-1.5">
+          <span class="w-3 h-3 rounded-full bg-[#E30613] border border-white inline-block"></span> 加盟站
+        </span>
+        <span class="flex items-center gap-1.5">
+          <span class="w-3 h-3 rounded-full bg-blue-500 animate-pulse border border-white inline-block"></span> 我的位置
+        </span>
+      </div>
+    </div>
+  </main>
+
+  <div id="csv-modal" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
+      
+      <div class="bg-cpc-blue text-white px-5 py-3 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <i class="fa-solid fa-file-csv text-amber-300 text-lg"></i>
+          <h3 class="font-bold text-base">CSV 原始數據線上編輯器</h3>
+        </div>
+        <button id="close-modal" class="text-slate-300 hover:text-white text-xl">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="p-4 flex-1 flex flex-col overflow-hidden space-y-2">
+        <p class="text-xs text-slate-600">
+          您可以直接在下方修改或貼上 CSV 格式數據（欄位：<code class="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 text-cpc-red font-semibold">站代號,站名,經營型態,行政區,地址,電話,經度,緯度,自助加油,營業時間,國道/快速道路鄰近,Gogoro換電</code>）。
+        </p>
+        <textarea id="csv-textarea" class="w-full flex-1 font-mono text-xs p-3 bg-slate-900 text-emerald-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-cpc-lightBlue custom-scrollbar resize-none border border-slate-700 leading-relaxed"></textarea>
+      </div>
+
+      <div class="bg-slate-50 px-5 py-3 border-t border-slate-200 flex justify-between items-center">
+        <button id="btn-reset-default-csv" class="text-xs text-slate-600 hover:text-cpc-red flex items-center gap-1 font-medium transition">
+          <i class="fa-solid fa-arrow-rotate-left"></i> 恢復官方預設 CSV
+        </button>
+        <div class="flex gap-2">
+          <button id="cancel-csv-modal" class="px-4 py-1.5 border border-slate-300 text-slate-700 text-xs rounded-lg hover:bg-slate-100 transition">
+            取消
+          </button>
+          <button id="apply-csv-modal" class="px-4 py-1.5 bg-cpc-blue hover:bg-cpc-lightBlue text-white text-xs font-semibold rounded-lg shadow-sm flex items-center gap-1 transition">
+            <i class="fa-solid fa-check"></i> 解析並套用至地圖
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="overpass-modal" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
+      
+      <div class="bg-purple-900 text-white px-5 py-3 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <i class="fa-solid fa-cloud-arrow-down text-purple-300 text-lg"></i>
+          <h3 class="font-bold text-base">Overpass API 實時 OSM 圖資撈取</h3>
+        </div>
+        <button id="close-overpass-modal" class="text-purple-200 hover:text-white text-xl">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="p-4 flex-1 flex flex-col overflow-hidden space-y-3">
+        <div class="flex items-center justify-between gap-2 flex-wrap text-xs">
+          <span class="text-slate-600 font-medium">選擇 Overpass QL 查詢模板：</span>
+          <div class="flex gap-1.5 flex-wrap">
+            <button id="btn-preset-kaohsiung" class="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-md border border-purple-200 font-medium transition">
+              <i class="fa-solid fa-gas-pump mr-1"></i>高雄市中油/CPC 加油站
+            </button>
+            <button id="btn-preset-peaks" class="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-md border border-purple-200 font-medium transition">
+              <i class="fa-solid fa-mountain mr-1"></i>高雄周邊主要山峰 (Peak)
+            </button>
+            <button id="btn-preset-bbox" class="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-md border border-purple-200 font-medium transition">
+              <i class="fa-solid fa-vector-square mr-1"></i>視角範圍內加油站
+            </button>
+          </div>
+        </div>
+
+        <div class="relative flex-1 flex flex-col">
+          <textarea id="overpass-ql-textarea" class="w-full flex-1 font-mono text-xs p-3 bg-slate-900 text-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 custom-scrollbar resize-none border border-slate-700 leading-relaxed" placeholder="輸入 Overpass QL 語法..."></textarea>
+          <div id="overpass-status" class="hidden absolute bottom-3 right-3 bg-purple-900/90 backdrop-blur text-purple-100 px-3 py-1.5 rounded-lg text-xs flex items-center gap-2 shadow-lg border border-purple-500">
+            <i class="fa-solid fa-spinner animate-spin text-purple-300"></i>
+            <span>正在向 Overpass API 撈取實時資料...</span>
+          </div>
+        </div>
+
+        <p class="text-[11px] text-slate-500">
+          <i class="fa-solid fa-circle-info text-purple-600"></i> 資料將由 OpenStreetMap Overpass Interpreter 實時查詢並呈現於地圖。
+        </p>
+      </div>
+
+      <div class="bg-slate-50 px-5 py-3 border-t border-slate-200 flex justify-end gap-2 items-center">
+        <button id="cancel-overpass-modal" class="px-4 py-1.5 border border-slate-300 text-slate-700 text-xs rounded-lg hover:bg-slate-100 transition">
+          取消
+        </button>
+        <button id="btn-run-overpass" class="px-5 py-1.5 bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold rounded-lg shadow-sm flex items-center gap-1.5 transition">
+          <i class="fa-solid fa-play"></i> 執行 Overpass 查詢並帶入地圖
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="osm-info-modal" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
+      <div class="bg-slate-800 text-white px-5 py-3 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <i class="fa-solid fa-book-open text-amber-400 text-lg"></i>
+          <h3 class="font-bold text-base">OSM 開放地理資料庫學習導覽</h3>
+        </div>
+        <button id="close-osm-info" class="text-slate-300 hover:text-white text-xl">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="p-5 flex-1 overflow-y-auto custom-scrollbar space-y-4 text-xs text-slate-700 leading-relaxed">
+        <div class="bg-blue-50 border-l-4 border-cpc-blue p-3 rounded-r-md">
+          <h4 class="font-bold text-cpc-blue text-sm mb-1"><i class="fa-solid fa-globe mr-1"></i> 什麼是 OpenStreetMap (OSM)?</h4>
+          <p>OpenStreetMap（開放街圖）是全球最大的群眾協同創作地圖資料庫，常被譽為「地圖界的維基百科」。所有地理資料皆以開放資料授權 (ODbL) 提供公眾免費使用與加值應用。</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div class="p-3 border border-slate-200 rounded-lg bg-slate-50">
+            <h5 class="font-bold text-slate-800 mb-1 flex items-center gap-1"><i class="fa-solid fa-border-all text-emerald-600"></i> 圖磚 (Map Tiles) vs 原始地理資料</h5>
+            <p>點陣圖磚 (Raster Tiles) 僅為已渲染完成的底圖圖片；而原始地理資料則包含 <code>Node</code> (點)、<code>Way</code> (線/面) 與詳細標籤 (Tags)，是 GIS 計算與搜尋的核心原料。</p>
+          </div>
+          <div class="p-3 border border-slate-200 rounded-lg bg-slate-50">
+            <h5 class="font-bold text-slate-800 mb-1 flex items-center gap-1"><i class="fa-solid fa-server text-purple-600"></i> OSM 台灣切片與資料取得</h5>
+            <p>包含 <code>Planet.osm</code> 全球備份、<strong>Geofabrik</strong> 每日區域切片檔 (PBF 格式)、<strong>Protomaps</strong> 即時向量切片，以及 <strong>Overpass API</strong> 即時 QL 查詢。</p>
+          </div>
+        </div>
+
+        <div class="border border-purple-200 bg-purple-50 p-3 rounded-lg">
+          <h5 class="font-bold text-purple-900 mb-1 flex items-center gap-1"><i class="fa-solid fa-code text-purple-700"></i> Overpass API 運作機制</h5>
+          <p>Overpass API 是一個開放的唯讀 API，允許開發者使用 Overpass QL 語法查詢特定 bounding box 或行政區劃內的特定 key/value 屬性（例如：<code>amenity=fuel</code>、<code>natural=peak</code>），並回傳 JSON/GeoJSON 資料。</p>
+        </div>
+      </div>
+
+      <div class="bg-slate-50 px-5 py-3 border-t border-slate-200 flex justify-end">
+        <button id="btn-close-osm-info" class="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg transition">
+          關閉導覽
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leaflet JS CDN -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    /**
+     * 高雄市中油加油站 (CPC) 預設 CSV 數據集
+     */
+    const DEFAULT_CPC_CSV = `站代號,站名,經營型態,行政區,地址,電話,經度,緯度,自助加油,營業時間,國道/快速道路鄰近,Gogoro換電
+D5101,民族站,直營,三民區,高雄市三民區民族一路418號,(07)382-6631,120.315500,22.653300,是,06:00-23:00,否,是
+D5102,建工路站,直營,三民區,高雄市三民區建工路566號,(07)383-2928,120.319800,22.648500,是,06:00-23:00,否,是
+D5103,覺民路站,直營,三民區,高雄市三民區覺民路362號,(07)386-9992,120.334100,22.642100,是,24小時,否,是
+D5104,鼎山路站,直營,三民區,高雄市三民區鼎山街373號,(07)383-9681,120.317500,22.655800,是,06:00-23:00,否,否
+D5105,山東街站,直營,三民區,高雄市三民區山東街70號,(07)311-8164,120.306800,22.646200,是,07:00-22:00,否,否
+D5106,中正二路站,直營,新興區,高雄市新興區中正二路166號,(07)224-1235,120.317222,22.630833,是,07:00-23:00,否,是
+D5107,中正三路站,直營,新興區,高雄市新興區中正三路9號,(07)226-1045,120.311200,22.631000,是,06:00-23:00,否,否
+D5108,民權路站,直營,前鎮區,高雄市前鎮區一心一路291號,(07)331-6290,120.313889,22.610556,是,24小時,否,是
+D5109,前鎮站,直營,前鎮區,高雄市前鎮區擴建路1-1號,(07)821-3719,120.306100,22.597500,是,06:00-23:00,否,否
+D5110,瑞豐站,直營,前鎮區,高雄市前鎮區瑞福路2號,(07)761-0629,120.332500,22.601200,是,06:00-22:00,否,是
+D5111,楠梓交流道站,直營,楠梓區,高雄市楠梓區鳳楠路45號,(07)353-7642,120.329444,22.729167,是,24小時,國1楠梓交流道,是
+D5112,右昌軍校路站,直營,楠梓區,高雄市楠梓區軍校路737號,(07)363-7331,120.291200,22.705500,是,06:00-23:00,否,是
+D5113,後勁站,直營,楠梓區,高雄市楠梓區後昌路200號,(07)361-3018,120.302222,22.716111,是,24小時,否,否
+D5114,仁武站,直營,仁武區,高雄市仁武區鳳仁路282號,(07)371-1361,120.348889,22.701111,是,24小時,國10仁武交流道,是
+D5115,左新站,加盟,左營區,高雄市左營區政德路171號,(07)341-2300,120.302500,22.678889,否,24小時,國10左營端,否
+D5116,岡山站,直營,岡山區,高雄市岡山區岡山南路45號,(07)625-2450,120.297500,22.788889,是,24小時,國1岡山交流道,是
+D5117,燕巢站,直營,燕巢區,高雄市燕巢區中興路199號,(07)616-1704,120.362222,22.791667,是,06:00-22:00,國10燕巢交流道,否
+D5118,林園沿海路站,直營,林園區,高雄市林園區沿海路四段1號,(07)641-7604,120.390556,22.502222,是,24小時,否,是
+D5119,南鼓山站,直營,鼓山區,高雄市鼓山區捷興二街46號,(07)551-7556,120.278333,22.622500,是,07:00-22:00,否,否
+D5120,大義街站,直營,鹽埕區,高雄市鹽埕區大義街56-1號,(07)551-8163,120.284722,22.620278,順,07:00-22:00,否,否
+D5121,建國一路站,直營,苓雅區,高雄市苓雅區建國一路142號,(07)751-8715,120.320278,22.630278,是,24小時,國1九如交流道,是
+D5122,三多三路站,直營,苓雅區,高雄市苓雅區三多三路264號,(07)333-5774,120.308500,22.618611,是,06:00-23:00,否,否
+D5123,青年路站,直營,苓雅區,高雄市苓雅區民權一路105號,(07)335-2549,120.310200,22.621000,是,06:00-23:00,否,是
+D5124,高鳳站,直營,苓雅區,高雄市苓雅區建國一路3號,(07)749-1901,120.331100,22.629500,是,24小時,國1中正交流道,是
+D5125,鳳山站,直營,鳳山區,高雄市鳳山區中山東路10號,(07)746-2492,120.360278,22.628889,是,24小時,否,是
+D5126,鳳松站,直營,鳳山區,高雄市鳳山區鳳松路178-5號,(07)743-1562,120.361500,22.639800,是,06:00-23:00,否,否
+D5127,五甲站,直營,鳳山區,高雄市鳳山區五甲二路695號,(07)812-3456,120.334167,22.596389,是,24小時,國1五甲交流道,是
+D5128,橋頭站,直營,橋頭區,高雄市橋頭區成功北路15號,(07)611-3644,120.308889,22.756111,是,06:00-22:00,國1岡山交流道,是
+D5129,永安站,直營,永安區,高雄市永安區保安路47號,(07)691-2014,120.245000,22.821000,是,06:00-22:00,否,否
+D5130,茄萣站,直營,茄萣區,高雄市茄萣區白砂路6號,(07)690-2849,120.182500,22.898800,是,06:00-21:00,台17線臨海,否
+D5131,大寮站,加盟,大寮區,高雄市大寮區鳳屏一路230號,(07)701-5230,120.395500,22.628100,否,24小時,台1線,是
+D5132,旗山站,直營,旗山區,高雄市旗山區中華路620號,(07)661-2130,120.481200,22.883500,是,06:00-22:00,國10旗山端,是
+D5133,美濃站,直營,美濃區,高雄市美濃區泰安路15號,(07)681-2041,120.539800,22.895100,是,06:00-21:00,否,否`;
+
+    let currentRawCsv = DEFAULT_CPC_CSV;
+    let parsedGasStations = [];
+    let userCoords = null;
+    let userMarker = null;
+
+    const initialCenter = [22.6450, 120.3150];
+    const initialZoom = 12;
+
+    const map = L.map('map', { zoomControl: false, maxZoom: 17 }).setView(initialCenter, initialZoom);
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    // OpenTopoMap 等高線地形圖圖磚
+    const opentopoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+      maxZoom: 17,
+      attribution: 'Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap (CC-BY-SA)'
+    });
+    opentopoLayer.addTo(map);
+
+    const markerLayer = L.layerGroup().addTo(map);
+    const markerMap = new Map();
+
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      const bgClass = type === 'success' ? 'bg-emerald-800' : type === 'error' ? 'bg-red-800' : 'bg-slate-800';
+      
+      toast.className = `${bgClass} text-white text-xs px-4 py-2.5 rounded-lg shadow-xl border border-white/20 flex items-center gap-2 pointer-events-auto toast-fade opacity-0 transform translate-y-2`;
+      toast.innerHTML = `<i class="fa-solid fa-circle-info text-amber-300"></i> <span>${message}</span>`;
+      
+      container.appendChild(toast);
+      requestAnimationFrame(() => {
+        toast.classList.remove('opacity-0', 'translate-y-2');
+      });
+
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-y-2');
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    function createCustomPinIcon(type, isSelected = false) {
+      const isDirect = type === "直營";
+      const isPeak = type === "山峰";
+      const mainColor = isPeak ? "#16a34a" : (isDirect ? "#003366" : "#E30613");
+      
+      const width = isSelected ? 38 : 30;
+      const height = isSelected ? 48 : 38;
+
+      const innerIcon = isPeak 
+        ? `<polygon points="16,6 26,22 6,22" fill="#ffffff" />`
+        : `<path d="M11 10 H17 V19 H11 Z M17 12 H19.5 V16 H17 Z" fill="${mainColor}" />`;
+
+      const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 42" width="${width}" height="${height}">
+          <path d="M16 0 C7.163 0 0 7.163 0 16 C0 28 16 42 16 42 C16 42 32 28 32 16 C32 7.163 24.837 0 16 0 Z" fill="${mainColor}" stroke="#ffffff" stroke-width="2"/>
+          <circle cx="16" cy="15" r="9.5" fill="#ffffff" />
+          ${innerIcon}
+        </svg>
+      `;
+
+      return L.divIcon({
+        className: 'station-pin',
+        html: svg,
+        iconSize: [width, height],
+        iconAnchor: [width / 2, height],
+        popupAnchor: [0, -height + 5]
+      });
+    }
+
+    function buildPopupHTML(station, distanceKm = null) {
+      const isPeak = station.經營型態 === '山峰';
+      
+      const typeBadge = isPeak
+        ? `<span class="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2 py-0.5 rounded border border-emerald-200">OSM 山峰</span>`
+        : (station.經營型態 === '直營' 
+            ? `<span class="bg-blue-100 text-cpc-blue text-[11px] font-bold px-2 py-0.5 rounded border border-blue-200">CPC 直營站</span>`
+            : `<span class="bg-red-100 text-cpc-red text-[11px] font-bold px-2 py-0.5 rounded border border-red-200">加盟站</span>`);
+
+      const gogoroBadge = station.Gogoro換電 === '是'
+        ? `<span class="inline-flex items-center text-[10px] text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded font-bold border border-emerald-300"><i class="fa-solid fa-bolt mr-1 text-emerald-600"></i>Gogoro換電</span>`
+        : '';
+
+      const selfServiceBadge = (station.自助加油 === '是' || station.自助加油 === '順')
+        ? `<span class="inline-flex items-center text-[10px] text-blue-800 bg-blue-100 px-1.5 py-0.5 rounded font-bold border border-blue-300"><i class="fa-solid fa-gas-pump mr-1 text-blue-600"></i>自助加油</span>`
+        : '';
+
+      const distanceText = distanceKm !== null 
+        ? `<p class="text-xs font-semibold text-blue-600 flex items-center gap-1 bg-blue-50 px-2 py-1 rounded border border-blue-100">
+            <i class="fa-solid fa-location-arrow"></i> 距離目前位置: ${distanceKm.toFixed(2)} 公里
+           </p>`
+        : '';
+
+      return `
+        <div class="bg-white">
+          <div class="bg-cpc-blue text-white px-3.5 py-2.5 flex justify-between items-center shadow-sm">
+            <h3 class="font-bold text-sm flex items-center gap-1.5 truncate">
+              <i class="fa-solid ${isPeak ? 'fa-mountain' : 'fa-gas-pump'} text-cpc-red bg-white rounded-full p-1 text-xs"></i>
+              ${station.站名 || '地點'}
+            </h3>
+            ${typeBadge}
+          </div>
+          <div class="p-3.5 text-xs space-y-2 text-slate-700">
+            <div class="flex items-center justify-between text-slate-400 text-[10px]">
+              <span>代號: ${station.站代號 || 'N/A'}</span>
+              <span>${station.行政區 || ''}</span>
+            </div>
+            ${distanceText}
+            <p class="flex items-start gap-1.5">
+              <i class="fa-solid fa-location-dot text-slate-400 mt-0.5 shrink-0"></i>
+              <span class="text-slate-800 font-medium">${station.地址 || '尚未提供地址'}</span>
+            </p>
+            <p class="flex items-center gap-1.5">
+              <i class="fa-solid fa-phone text-slate-400 shrink-0"></i>
+              <a href="tel:${station.電話}" class="text-cpc-lightBlue hover:underline">${station.電話 || '未提供電話'}</a>
+            </p>
+            <p class="flex items-center gap-1.5">
+              <i class="fa-regular fa-clock text-slate-400 shrink-0"></i>
+              <span>資訊/營業時間：<strong class="text-slate-900">${station.營業時間 || '未標註'}</strong></span>
+            </p>
+            <div class="flex items-center gap-1 pt-1 flex-wrap">
+              ${selfServiceBadge}
+              ${gogoroBadge}
+            </div>
+            <div class="pt-2 flex items-center justify-end border-t border-slate-100 mt-2">
+              <a href="https://www.google.com/maps/search/?api=1&query=${station.緯度},${station.經度}" target="_blank" rel="noopener" 
+                class="bg-cpc-blue hover:bg-cpc-lightBlue text-white text-[11px] px-3 py-1.5 rounded-md font-medium flex items-center gap-1 transition shadow-sm">
+                <i class="fa-solid fa-diamond-turn-right text-xs"></i> Google 地圖導航
+              </a>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function calculateDistanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    function parseAndLoadCSV(csvText) {
+      Papa.parse(csvText, {
+        header: true,
+        skipEmptyLines: true,
+        complete: function(results) {
+          parsedGasStations = results.data.filter(row => {
+            const lng = parseFloat(row.經度);
+            const lat = parseFloat(row.緯度);
+            return !isNaN(lng) && !isNaN(lat) && row.站名;
+          });
+
+          updateDistrictDropdown();
+          updateAppView();
+        }
+      });
+    }
+
+    function updateDistrictDropdown() {
+      const select = document.getElementById('filter-district');
+      const currentValue = select.value;
+      
+      const districts = [...new Set(parsedGasStations.map(s => s.行政區).filter(Boolean))].sort();
+      
+      select.innerHTML = '<option value="all">全部行政區</option>';
+      districts.forEach(d => {
+        const option = document.createElement('option');
+        option.value = d;
+        option.textContent = d;
+        select.appendChild(option);
+      });
+
+      select.value = districts.includes(currentValue) ? currentValue : 'all';
+    }
+
+    function getFilteredStations() {
+      const searchKey = document.getElementById('search-input').value.trim().toLowerCase();
+      const districtFilter = document.getElementById('filter-district').value;
+      const typeFilter = document.getElementById('filter-type').value;
+      const selfServiceOnly = document.getElementById('filter-selfservice').checked;
+      const highwayOnly = document.getElementById('filter-highway').checked;
+      const hours24Only = document.getElementById('filter-24h').checked;
+      const gogoroOnly = document.getElementById('filter-gogoro').checked;
+
+      return parsedGasStations.filter(station => {
+        const searchTarget = `${station.站代號 || ''} ${station.站名 || ''} ${station.地址 || ''} ${station.電話 || ''} ${station.行政區 || ''}`.toLowerCase();
+        const matchesSearch = !searchKey || searchTarget.includes(searchKey);
+        const matchesDistrict = districtFilter === 'all' || station.行政區 === districtFilter;
+        const matchesType = typeFilter === 'all' || station.經營型態 === typeFilter;
+        const matchesSelfService = !selfServiceOnly || (station.自助加油 === '是' || station.自助加油 === '順');
+        const matchesHighway = !highwayOnly || (station['國道/快速道路鄰近'] && station['國道/快速道路鄰近'] !== '否');
+        const matches24h = !hours24Only || (station.營業時間 && station.營業時間.includes('24'));
+        const matchesGogoro = !gogoroOnly || station.Gogoro換電 === '是';
+
+        return matchesSearch && matchesDistrict && matchesType && matchesSelfService && matchesHighway && matches24h && matchesGogoro;
+      });
+    }
+
+    function updateAppView() {
+      const filtered = getFilteredStations();
+      
+      markerLayer.clearLayers();
+      markerMap.clear();
+
+      const listContainer = document.getElementById('station-list');
+      listContainer.innerHTML = '';
+
+      document.getElementById('result-count').innerText = filtered.length;
+
+      const directCount = filtered.filter(s => s.經營型態 === '直營').length;
+      const franchiseCount = filtered.filter(s => s.經營型態 === '加盟').length;
+      const selfCount = filtered.filter(s => s.自助加油 === '是' || s.自助加油 === '順').length;
+
+      document.getElementById('stat-ratio').innerText = `${directCount}/${franchiseCount}`;
+      document.getElementById('stat-self').innerText = selfCount;
+
+      if (filtered.length === 0) {
+        listContainer.innerHTML = `
+          <div class="text-center py-12 px-4 text-slate-400 space-y-2 bg-white rounded-xl border border-slate-200">
+            <i class="fa-solid fa-map-location-dot text-4xl text-slate-300"></i>
+            <p class="text-xs font-semibold text-slate-600">搜尋無結果</p>
+            <p class="text-[11px] text-slate-400">請嘗試調整關鍵字或 Overpass QL 條件</p>
+          </div>
+        `;
+        return;
+      }
+
+      const bounds = L.latLngBounds();
+
+      filtered.forEach(station => {
+        const lat = parseFloat(station.緯度);
+        const lng = parseFloat(station.經度);
+
+        let distKm = null;
+        if (userCoords) {
+          distKm = calculateDistanceKm(userCoords.lat, userCoords.lng, lat, lng);
+          station._dist = distKm;
+        }
+
+        bounds.extend([lat, lng]);
+
+        const marker = L.marker([lat, lng], {
+          icon: createCustomPinIcon(station.經營型態)
+        });
+
+        marker.bindPopup(buildPopupHTML(station, distKm));
+        marker.on('click', () => highlightCard(station.站代號));
+
+        markerLayer.addLayer(marker);
+        markerMap.set(station.站代號, marker);
+
+        const card = document.createElement('div');
+        card.id = `card-${station.站代號}`;
+        card.className = "bg-white p-3 rounded-xl border border-slate-200 hover:border-cpc-lightBlue hover:shadow-md transition cursor-pointer space-y-1.5 text-xs relative overflow-hidden group";
+
+        const typeBadge = station.經營型態 === '山峰'
+          ? `<span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-200">山峰</span>`
+          : (station.經營型態 === '直營'
+            ? `<span class="bg-blue-100 text-cpc-blue text-[10px] font-bold px-2 py-0.5 rounded border border-blue-200">直營</span>`
+            : `<span class="bg-red-100 text-cpc-red text-[10px] font-bold px-2 py-0.5 rounded border border-red-200">加盟</span>`);
+
+        const distPill = distKm !== null 
+          ? `<span class="text-[10px] bg-blue-50 text-blue-700 font-semibold px-1.5 py-0.5 rounded border border-blue-200"><i class="fa-solid fa-location-arrow text-[9px]"></i> ${distKm.toFixed(1)} km</span>`
+          : '';
+
+        card.innerHTML = `
+          <div class="flex items-center justify-between">
+            <h4 class="font-bold text-slate-800 group-hover:text-cpc-blue transition flex items-center gap-1.5 truncate">
+              <i class="fa-solid ${station.經營型態 === '山峰' ? 'fa-mountain text-emerald-600' : 'fa-gas-pump text-cpc-red'} text-xs"></i>
+              ${station.站名}
+            </h4>
+            <div class="flex items-center gap-1 shrink-0">
+              ${distPill}
+              ${typeBadge}
+            </div>
+          </div>
+          <p class="text-slate-500 text-[11px] truncate flex items-center gap-1">
+            <i class="fa-solid fa-location-dot text-slate-400"></i> ${station.地址}
+          </p>
+          <div class="flex items-center justify-between text-slate-600 pt-1 border-t border-slate-100 mt-1 text-[11px]">
+            <span class="text-slate-500 text-[10px]"><i class="fa-regular fa-clock mr-1"></i>${station.營業時間}</span>
+            <div class="flex items-center gap-1">
+              ${(station.自助加油 === '是' || station.自助加油 === '順') ? '<span class="text-emerald-600 font-medium text-[10px]"><i class="fa-solid fa-circle-check"></i> 自助</span>' : ''}
+              ${station.Gogoro換電 === '是' ? '<span class="text-amber-600 font-medium text-[10px]"><i class="fa-solid fa-bolt"></i> 換電</span>' : ''}
+            </div>
+          </div>
+        `;
+
+        card.addEventListener('click', () => {
+          focusStation(station);
+          if (window.innerWidth < 768) {
+            toggleSidebar(false);
+          }
+        });
+
+        listContainer.appendChild(card);
+      });
+
+      if (filtered.length > 0 && bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+      }
+    }
+
+    function focusStation(station) {
+      const marker = markerMap.get(station.站代號);
+      if (marker) {
+        map.flyTo([parseFloat(station.緯度), parseFloat(station.經度)], 16, { duration: 0.8 });
+        marker.openPopup();
+        highlightCard(station.站代號);
+      }
+    }
+
+    function highlightCard(stationId) {
+      document.querySelectorAll('#station-list > div').forEach(el => {
+        el.classList.remove('border-cpc-blue', 'bg-blue-50/60', 'ring-2', 'ring-cpc-lightBlue/30');
+      });
+      const selectedCard = document.getElementById(`card-${stationId}`);
+      if (selectedCard) {
+        selectedCard.classList.add('border-cpc-blue', 'bg-blue-50/60', 'ring-2', 'ring-cpc-lightBlue/30');
+        selectedCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
+    document.getElementById('btn-user-location').addEventListener('click', () => {
+      if ('geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition((pos) => {
+          userCoords = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude
+          };
+
+          if (userMarker) {
+            map.removeLayer(userMarker);
+          }
+
+          const userIcon = L.divIcon({
+            className: 'user-pin-container',
+            html: `<div class="pulse-user-location"></div>`,
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+          });
+
+          userMarker = L.marker([userCoords.lat, userCoords.lng], { icon: userIcon }).addTo(map);
+          userMarker.bindPopup('<div class="p-2 text-xs font-bold text-blue-600">您目前的位置</div>').openPopup();
+
+          map.flyTo([userCoords.lat, userCoords.lng], 14);
+          updateAppView();
+          showToast("已成功定位您的目前位置", "success");
+        }, () => {
+          showToast("無法存取定位權限", "error");
+        });
+      } else {
+        showToast("您的瀏覽器不支援地理定位", "error");
+      }
+    });
+
+    document.getElementById('search-input').addEventListener('input', (e) => {
+      document.getElementById('clear-search').classList.toggle('hidden', e.target.value.length === 0);
+      updateAppView();
+    });
+
+    document.getElementById('clear-search').addEventListener('click', () => {
+      document.getElementById('search-input').value = '';
+      document.getElementById('clear-search').classList.add('hidden');
+      updateAppView();
+    });
+
+    document.getElementById('filter-district').addEventListener('change', updateAppView);
+    document.getElementById('filter-type').addEventListener('change', updateAppView);
+    document.getElementById('filter-selfservice').addEventListener('change', updateAppView);
+    document.getElementById('filter-highway').addEventListener('change', updateAppView);
+    document.getElementById('filter-24h').addEventListener('change', updateAppView);
+    document.getElementById('filter-gogoro').addEventListener('change', updateAppView);
+
+    document.getElementById('reset-filters').addEventListener('click', () => {
+      document.getElementById('search-input').value = '';
+      document.getElementById('clear-search').classList.add('hidden');
+      document.getElementById('filter-district').value = 'all';
+      document.getElementById('filter-type').value = 'all';
+      document.getElementById('filter-selfservice').checked = false;
+      document.getElementById('filter-highway').checked = false;
+      document.getElementById('filter-24h').checked = false;
+      document.getElementById('filter-gogoro').checked = false;
+      updateAppView();
+    });
+
+    // CSV File Import & Export
+    document.getElementById('csv-file-input').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        currentRawCsv = evt.target.result;
+        parseAndLoadCSV(currentRawCsv);
+        showToast("已成功匯入新 CSV 數據集", "success");
+      };
+      reader.readAsText(file, 'UTF-8');
+    });
+
+    document.getElementById('btn-export-csv').addEventListener('click', () => {
+      const blob = new Blob([currentRawCsv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `kaohsiung_osm_cpc_stations_${new Date().toISOString().slice(0,10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      showToast("已成功下載 CSV 檔案", "success");
+    });
+
+    // Modal Operations
+    const modal = document.getElementById('csv-modal');
+    const textarea = document.getElementById('csv-textarea');
+
+    document.getElementById('btn-open-csv').addEventListener('click', () => {
+      textarea.value = currentRawCsv;
+      modal.classList.remove('hidden');
+    });
+
+    document.getElementById('close-modal').addEventListener('click', () => modal.classList.add('hidden'));
+    document.getElementById('cancel-csv-modal').addEventListener('click', () => modal.classList.add('hidden'));
+
+    document.getElementById('apply-csv-modal').addEventListener('click', () => {
+      currentRawCsv = textarea.value;
+      parseAndLoadCSV(currentRawCsv);
+      modal.classList.add('hidden');
+      showToast("解析套用完成", "success");
+    });
+
+    document.getElementById('btn-reset-default-csv').addEventListener('click', () => {
+      currentRawCsv = DEFAULT_CPC_CSV;
+      textarea.value = DEFAULT_CPC_CSV;
+      parseAndLoadCSV(DEFAULT_CPC_CSV);
+      modal.classList.add('hidden');
+      showToast("已重設為預設中油資料庫", "info");
+    });
+
+    const osmInfoModal = document.getElementById('osm-info-modal');
+    document.getElementById('btn-osm-info').addEventListener('click', () => osmInfoModal.classList.remove('hidden'));
+    document.getElementById('close-osm-info').addEventListener('click', () => osmInfoModal.classList.add('hidden'));
+    document.getElementById('btn-close-osm-info').addEventListener('click', () => osmInfoModal.classList.add('hidden'));
+
+    const sidebar = document.getElementById('sidebar');
+    function toggleSidebar(show) {
+      sidebar.classList.toggle('-translate-x-full', !show);
+    }
+
+    document.getElementById('mobile-toggle').addEventListener('click', () => toggleSidebar(true));
+    document.getElementById('mobile-close').addEventListener('click', () => toggleSidebar(false));
+
+    const overpassModal = document.getElementById('overpass-modal');
+    const overpassQlTextarea = document.getElementById('overpass-ql-textarea');
+    const overpassStatus = document.getElementById('overpass-status');
+
+    function getKaohsiungCpcOverpassQuery() {
+      return `[out:json][timeout:25];
+area["name"="高雄市"]->.searchArea;
+(
+  node["amenity"="fuel"](area.searchArea);
+  way["amenity"="fuel"](area.searchArea);
+);
+out center tags;`;
+    }
+
+    function getKaohsiungPeaksQuery() {
+      return `[out:json][timeout:25];
+area["name"="高雄市"]->.searchArea;
+(
+  node["natural"="peak"](area.searchArea);
+);
+out center tags;`;
+    }
+
+    function getViewportBboxOverpassQuery() {
+      const bounds = map.getBounds();
+      const bbox = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
+      return `[out:json][timeout:25];
+(
+  node["amenity"="fuel"](${bbox});
+  way["amenity"="fuel"](${bbox});
+);
+out center tags;`;
+    }
+
+    document.getElementById('btn-overpass').addEventListener('click', () => {
+      overpassQlTextarea.value = getKaohsiungCpcOverpassQuery();
+      overpassModal.classList.remove('hidden');
+    });
+
+    document.getElementById('close-overpass-modal').addEventListener('click', () => overpassModal.classList.add('hidden'));
+    document.getElementById('cancel-overpass-modal').addEventListener('click', () => overpassModal.classList.add('hidden'));
+
+    document.getElementById('btn-preset-kaohsiung').addEventListener('click', () => {
+      overpassQlTextarea.value = getKaohsiungCpcOverpassQuery();
+    });
+
+    document.getElementById('btn-preset-peaks').addEventListener('click', () => {
+      overpassQlTextarea.value = getKaohsiungPeaksQuery();
+    });
+
+    document.getElementById('btn-preset-bbox').addEventListener('click', () => {
+      overpassQlTextarea.value = getViewportBboxOverpassQuery();
+    });
+
+    document.getElementById('btn-run-overpass').addEventListener('click', async () => {
+      const query = overpassQlTextarea.value.trim();
+      if (!query) {
+        showToast("請輸入 Overpass QL 查詢語法", "error");
+        return;
+      }
+
+      overpassStatus.classList.remove('hidden');
+      document.getElementById('btn-run-overpass').disabled = true;
+
+      try {
+        const response = await fetch('https://overpass-api.de/api/interpreter', {
+          method: 'POST',
+          body: 'data=' + encodeURIComponent(query),
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error(`Overpass API 錯誤 (${response.status})`);
+        }
+
+        const json = await response.json();
+        
+        if (!json.elements || json.elements.length === 0) {
+          showToast("Overpass API 未回傳任何數據", "error");
+          return;
+        }
+
+        const csvHeader = "站代號,站名,經營型態,行政區,地址,電話,經度,緯度,自助加油,營業時間,國道/快速道路鄰近,Gogoro換電";
+        const rows = [csvHeader];
+
+        json.elements.forEach((elem, index) => {
+          const tags = elem.tags || {};
+          
+          let lat = elem.lat;
+          let lon = elem.lon;
+          if (elem.type === 'way' && elem.center) {
+            lat = elem.center.lat;
+            lon = elem.center.lon;
+          }
+
+          if (!lat || !lon) return;
+
+          const isPeak = tags.natural === 'peak';
+          const rawName = tags.name || tags['name:zh'] || (isPeak ? '未命名山峰' : '加油站');
+          const cleanName = isPeak ? rawName : rawName.replace(/台灣中油|中油|加油站/g, '').trim() || '加油站';
+          
+          const brand = tags.brand || tags.operator || '';
+          const isFranchise = brand.includes('加盟') || (tags.operator && tags.operator.includes('加盟'));
+          const type = isPeak ? '山峰' : (isFranchise ? '加盟' : '直營');
+
+          const district = tags['addr:district'] || tags['addr:subdistrict'] || '高雄地區';
+          const fullAddr = tags['addr:full'] || 
+            `${tags['addr:city'] || '高雄市'}${tags['addr:district'] || ''}${tags['addr:street'] || ''}${tags['addr:housenumber'] ? tags['addr:housenumber'] + '號' : ''}`;
+          
+          const phone = tags.phone || tags['contact:phone'] || '無資料';
+          const selfService = (tags.self_service === 'yes' || tags['fuel:discount'] === 'yes') ? '是' : '否';
+          const hours = isPeak ? `標高 ${tags.ele || '未註明'}m` : (tags.opening_hours || '24小時');
+          const gogoro = (tags.network === 'Gogoro' || tags.battery_charging === 'yes') ? '是' : '否';
+          const highway = (tags.motorway === 'yes' || tags['ref']?.includes('國')) ? '鄰近幹道' : '否';
+
+          const code = tags['ref:CPC'] || tags['ref'] || `OSM${1000 + index}`;
+
+          rows.push(`${code},${cleanName},${type},${district},${fullAddr},${phone},${lon.toFixed(6)},${lat.toFixed(6)},${selfService},${hours},${highway},${gogoro}`);
+        });
+
+        currentRawCsv = rows.join('\n');
+        parseAndLoadCSV(currentRawCsv);
+
+        overpassModal.classList.add('hidden');
+        showToast(`成功從 OSM Overpass API 載入 ${json.elements.length} 筆資料`, "success");
+
+      } catch (err) {
+        console.error("Overpass API Error:", err);
+        showToast("Overpass API 查詢失敗：" + err.message, "error");
+      } finally {
+        overpassStatus.classList.add('hidden');
+        document.getElementById('btn-run-overpass').disabled = false;
+      }
+    });
+
+    window.onload = function () {
+      parseAndLoadCSV(currentRawCsv);
+    };
+  </script>
+</body>
+</html>
